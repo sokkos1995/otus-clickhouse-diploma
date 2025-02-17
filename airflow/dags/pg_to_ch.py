@@ -6,6 +6,7 @@ from clickhouse_driver import Client
 
 from airflow.models import DAG
 from airflow.operators.python import PythonOperator
+from airflow.models.connection import Connection
 
 CH_HOST = 'clickhouse1'
 CH_PORT = 9000
@@ -20,34 +21,27 @@ def pg_to_ch():
     # Отправляем запрос к апи
     log.info('PG to CH')
     pg_engine = create_engine('postgresql://otus:otus_diploma@postgres:5432/airflow')
-    df = pd.read_sql_table('dag_code', pg_engine)
+    df = pd.read_sql_table('dag_run', pg_engine)
 
     # загружаем данные в кликхаус
-    clickhouse = Client(
-        host=CH_HOST,
-        port=CH_PORT,
-        user=CH_USER,
-        password=CH_PASSWORD,
-        settings={"use_numpy":True}
-    )
-    clickhouse.insert_dataframe('INSERT INTO ext.api_quotes (id, quote, year) VALUES', df)
-    log.info('data inserted')
+    conn = Connection.get_connection_from_secrets('ch_1')
 
-def optimize_table():
-    '''
-    We have table with ReplacingMT engine - start merge in order to replace data
-    '''
-    SQL = 'optimize table ext.api_quotes;'
+    # clickhouse = Client(
+    #     host=conn.host,
+    #     port=conn.port,
+    #     user=conn.login,
+    #     password=conn.password,
+    #     settings={"use_numpy":True}
+    # )
     clickhouse = Client(
-        host=CH_HOST,
-        port=CH_PORT,
-        user=CH_USER,
-        password=CH_PASSWORD,
+        host='clickhouse1',
+        port=9000,
+        user='default',
+        password='',
         settings={"use_numpy":True}
-    )
-    log.info(SQL)
-    clickhouse.execute(SQL)
-    log.info('Table optimized')
+    )  
+    clickhouse.insert_dataframe('INSERT INTO prod.dag_run VALUES', df)
+    log.info('data inserted')
 
 
 with DAG(

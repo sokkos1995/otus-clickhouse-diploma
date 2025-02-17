@@ -44,11 +44,13 @@ services:
       - "8223:8123"
     volumes:
       - ./ch/replica01/config.d:/etc/clickhouse-server/config.d
+      - ./ch/init_db:/tmp/scripts
     networks:
       - ch_replicated
     depends_on:
       - zookeeper
       - minio
+    restart: on-failure
       
   clickhouse2:
     image: clickhouse/clickhouse-server:24.8.4.13
@@ -64,6 +66,7 @@ services:
     depends_on:
       - zookeeper
       - minio
+    restart: on-failure
 
   postgres:
     image: postgres:15.8-bullseye 
@@ -73,9 +76,9 @@ services:
       - POSTGRES_PASSWORD=otus_diploma
       - POSTGRES_USER=otus
       - POSTGRES_DB=airflow
-    restart: always
-    ports:
-      - 5432:5432
+    # restart: always
+    # ports:
+    #   - 5432:5432
     networks:
       - ch_replicated      
 
@@ -102,6 +105,8 @@ services:
       - MINIO_ROOT_USER=minioadmin
       - MINIO_ROOT_PASSWORD=minioadminpassword
       - MINIO_DEFAULT_BUCKETS=clickhouse:public
+    # volumes:
+    #   - ./minio:/bitnami/minio/data      
     networks:
       - ch_replicated   
 

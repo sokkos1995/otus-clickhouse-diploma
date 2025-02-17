@@ -4,14 +4,11 @@ import os
 
 from airflow.models import DAG
 from airflow.operators.python import PythonOperator
+from airflow.models.connection import Connection
 
 import pandas as pd
 from clickhouse_driver import Client
 
-CH_HOST = 'clickhouse1'
-CH_PORT = 9000
-CH_USER = 'default'
-CH_PASSWORD = ''
 
 DROP_TABLE = 'drop table if exists default.netflix'
 CREATE_TABLE = '''
@@ -38,13 +35,22 @@ def create_table():
     '''
     создаем таблицу
     '''
+    conn = Connection.get_connection_from_secrets('ch_1')
+
+    # clickhouse = Client(
+    #     host=conn.host,
+    #     port=conn.port,
+    #     user=conn.login,
+    #     password=conn.password,
+    #     settings={"use_numpy":True}
+    # )
     clickhouse = Client(
-        host=CH_HOST,
-        port=CH_PORT,
-        user=CH_USER,
-        password=CH_PASSWORD,
+        host='clickhouse1',
+        port=9000,
+        user='default',
+        password='',
         settings={"use_numpy":True}
-    )
+    )  
     log.info(DROP_TABLE)
     clickhouse.execute(DROP_TABLE)
     log.info('table dropped')    
@@ -61,13 +67,22 @@ def api_to_ch():
     df = pd.read_csv("https://raw.githubusercontent.com/practiceprobs/datasets/main/netflix-titles/netflix-titles.csv")
     log.info('df downloaded')
 
+    conn = Connection.get_connection_from_secrets('ch_1')
+
+    # clickhouse = Client(
+    #     host=conn.host,
+    #     port=conn.port,
+    #     user=conn.login,
+    #     password=conn.password,
+    #     settings={"use_numpy":True}
+    # )
     clickhouse = Client(
-        host=CH_HOST,
-        port=CH_PORT,
-        user=CH_USER,
-        password=CH_PASSWORD,
+        host='clickhouse1',
+        port=9000,
+        user='default',
+        password='',
         settings={"use_numpy":True}
-    )
+    )  
     clickhouse.insert_dataframe('insert into default.netflix values ', df)
     log.info('data inserted')
 
@@ -75,13 +90,22 @@ def check_results():
     '''
     Checks the results of the ETL task by running a query and logging its results
     '''
+    conn = Connection.get_connection_from_secrets('ch_1')
+
+    # clickhouse = Client(
+    #     host=conn.host,
+    #     port=conn.port,
+    #     user=conn.login,
+    #     password=conn.password,
+    #     settings={"use_numpy":True}
+    # )
     clickhouse = Client(
-        host=CH_HOST,
-        port=CH_PORT,
-        user=CH_USER,
-        password=CH_PASSWORD,
+        host='clickhouse1',
+        port=9000,
+        user='default',
+        password='',
         settings={"use_numpy":True}
-    )
+    )  
     log.info('select count() from default.netflix')
     results = clickhouse.execute('select count() from default.netflix')
     log.info('Results: %s', results)

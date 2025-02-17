@@ -8,6 +8,7 @@ DROP DATABASE IF EXISTS airflow_metadata ON CLUSTER otus;
 DROP DATABASE IF EXISTS ext ON CLUSTER otus;
 DROP DATABASE IF EXISTS prod ON CLUSTER otus;
 DROP DATABASE IF EXISTS datamart ON CLUSTER otus;
+DROP DATABASE IF EXISTS dashboard ON CLUSTER otus;
 
 CREATE DATABASE IF NOT EXISTS streams ON CLUSTER otus COMMENT 'База данных с консьюмерами кафки';
 CREATE DATABASE IF NOT EXISTS raw ON CLUSTER otus COMMENT 'База данных с сырыми данными из кафки';
@@ -17,12 +18,14 @@ CREATE DATABASE IF NOT EXISTS airflow_metadata ON CLUSTER otus COMMENT 'База
 CREATE DATABASE IF NOT EXISTS ext ON CLUSTER otus COMMENT 'База данных, куда складываем данные из внешних систем (апи, парсинг и тд)'; 
 CREATE DATABASE IF NOT EXISTS prod ON CLUSTER otus COMMENT 'База данных, куда складываем данные из прода (ОЛТП базы данных)';
 CREATE DATABASE IF NOT EXISTS datamart ON CLUSTER otus COMMENT 'Основная БД для запросов со стороны BI';
+CREATE DATABASE IF NOT EXISTS dashboard ON CLUSTER otus COMMENT 'БД мониторинга';
 
 -- создаем таблицы
 
+-----------------------------------------
 -- схема stream
+-----------------------------------------
 
--- TODO посмотреть как считываются данные (не будет ли дублей или пропусков?)
 drop table if exists streams.sensor_data on cluster otus;
 CREATE TABLE streams.sensor_data on cluster otus
 (
@@ -35,7 +38,9 @@ SETTINGS kafka_broker_list = 'kafka1:9092',
          kafka_group_name = 'ch_consumer'
 ;
 
+-----------------------------------------
 -- схема raw
+-----------------------------------------
 
 create table if not exists raw.sensor_data_raw on cluster otus
 (
@@ -61,7 +66,33 @@ SELECT message,
        now64() AS _row_created
 FROM streams.sensor_data;
 
+-----------------------------------------
+-- схема parsed
+-----------------------------------------
+
+CREATE TABLE parsed.sensor_data on cluster otus
+(
+    sensor_id   UInt32,
+    temperature Float,
+    humidity    Float,
+    `timestamp` UInt64
+)
+ENGINE = ReplicatedMergeTree()
+ORDER BY sensor_id
+comment 'Распаршенные данные из кафки';
+
+CREATE MATERIALIZED VIEW raw.sensor_data_raw_mv
+    TO parsed.sensor_data
+AS
+SELECT JSONExtractInt(message, 'sensor_id') AS sensor_id,
+       JSONExtractFloat(message, 'temperature') AS temperature,
+       JSONExtractFloat(message, 'humidity') AS humidity,
+       JSONExtractInt(message, 'timestamp') AS timestamp
+FROM raw.sensor_data_raw;
+
+-----------------------------------------
 -- схема dict
+-----------------------------------------
 
 DROP DICTIONARY IF EXISTS dict.airflow_ab_user_role on cluster otus;
 CREATE DICTIONARY IF NOT EXISTS dict.airflow_ab_user_role ON CLUSTER otus
@@ -95,7 +126,7 @@ CREATE DICTIONARY IF NOT EXISTS dict.airflow_ab_user ON CLUSTER otus
 	first_name       String ,
 	last_name        String ,
 	username         String ,
-	"password"       varchar(256),
+	"password"       String,
 	active           UInt8,
 	email            String ,
 	last_login       DateTime,
@@ -112,7 +143,24 @@ LIFETIME(MIN 86400 MAX 126000)
 LAYOUT(hashed())
 ;
 
+-----------------------------------------
+-- схема airflow_metadata
+-----------------------------------------
+
+CREATE TABLE airflow_metadata.dag_code on cluster otus
+(
+    fileloc_hash     String,
+    fileloc          String,
+    last_updated     DateTime ,
+    source_code      String 
+)
+ENGINE = PostgreSQL(airflow_pg, table='dag_code')
+;
+
+
+-----------------------------------------
 -- схема ext
+-----------------------------------------
 
 CREATE TABLE ext.api_quotes on cluster otus
 (
@@ -125,7 +173,34 @@ ENGINE = ReplicatedReplacingMergeTree(_row_created)
 order by id
 ;
 
+-----------------------------------------
+-- схема prod
+-----------------------------------------
+
+CREATE TABLE prod.dag_run on cluster otus
+(
+    id                       UInt16 ,
+    dag_id                   String,
+    execution_date           DateTime,
+    state                    String,
+    run_id                   String,
+    external_trigger         UInt8,
+    conf                     String,
+    end_date                 DateTime,
+    start_date               DateTime,
+    run_type                 String ,
+    last_scheduling_decision DateTime,
+    dag_hash                 String,
+    creating_job_id          UInt8,
+    queued_at                DateTime
+)
+ENGINE = ReplicatedMergeTree()
+order by id
+;
+
+-----------------------------------------
 -- схема datamart
+-----------------------------------------
 
 CREATE TABLE datamart.trips ON CLUSTER otus
 (
@@ -149,6 +224,7 @@ CREATE TABLE datamart.trips ON CLUSTER otus
 )
 ENGINE = ReplicatedMergeTree
 PRIMARY KEY (pickup_datetime, dropoff_datetime)
+TTL pickup_datetime + INTERVAL 1 MONTH TO DISK 's3_cold'
 ;
 
 INSERT INTO datamart.trips
@@ -174,4 +250,31 @@ FROM s3(
     'https://datasets-documentation.s3.eu-west-3.amazonaws.com/nyc-taxi/trips_{0..2}.gz',
     'TabSeparatedWithNames'
 )
-;
+
+-----------------------------------------
+-- схема dashboard
+-----------------------------------------
+
+create table dashboard.kafka_monitoring on cluster otus
+engine=ReplicatedMergeTree
+order by tuple()
+as system.dashboards;
+
+insert into dashboard.kafka_monitoring
+values
+('Overview', 'Average temperature', 'select toStartOfInterval(toDateTime(`timestamp`), INTERVAL {rounding:UInt32} SECOND)::INT AS t , avg(temperature)
+from parsed.sensor_data
+where True
+and `timestamp` >= toDateTime(now() - {seconds:UInt32})
+GROUP BY t
+ORDER BY t WITH FILL STEP {rounding:UInt32}
+;');
+insert into dashboard.kafka_monitoring
+values
+('Overview', 'Average humidity', 'select toStartOfInterval(toDateTime(`timestamp`), INTERVAL {rounding:UInt32} SECOND)::INT AS t , avg(humidity)
+from parsed.sensor_data
+where True
+and `timestamp` >= toDateTime(now() - {seconds:UInt32})
+GROUP BY t
+ORDER BY t WITH FILL STEP {rounding:UInt32}
+;')

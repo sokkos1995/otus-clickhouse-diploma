@@ -1,6 +1,8 @@
 <clickhouse>
     <storage_configuration>
         <disks>
+            <default>
+            </default>        
             <s3_backup>
                 <type>s3</type>
                 <endpoint>http://minio:9000/clickhouse//</endpoint>
@@ -30,9 +32,9 @@
                     <default>
                         <disk>default</disk>
                     </default>      
-                    <s3_backup>
+                    <s3_cold>
                         <disk>s3_cold</disk>
-                    </s3_backup>                                     
+                    </s3_cold>                                     
                 </volumes>                      
             </default>            
             <s3_backup>

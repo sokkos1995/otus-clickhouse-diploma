@@ -1,17 +1,13 @@
 from datetime import datetime, timedelta, date
 import logging as log
 import os
+from dateutil.parser import parse
 
 from airflow.models import DAG
-from airflow.operators.python import PythonOperator, ShortCircuitOperator
+from airflow.operators.python import PythonOperator, BranchPythonOperator
+from airflow.models.connection import Connection
 
-import pandas as pd
 from clickhouse_driver import Client
-
-CH_HOST = 'clickhouse1'
-CH_PORT = 9000
-CH_USER = 'default'
-CH_PASSWORD = ''
 
 FULL_BACKUP = """
 BACKUP ALL ON CLUSTER otus TO Disk('s3_backup', 'backup_{num}');
@@ -21,25 +17,27 @@ BACKUP ALL ON CLUSTER otus TO Disk('s3_backup', 'backup_{num}')
     SETTINGS base_backup = Disk('s3_backup', 'test_backups')
 """
 
-def define_backup(**context):
-    """
-    """
-    print(context)
-    params = context.get('execution_date').strftime('%Y%m%d_%H')
-    print(params)
-    print(FULL_BACKUP.format(num=params))
 
 def backup_full(**context):
     '''
     Делаем полный бэкап
     '''
+    conn = Connection.get_connection_from_secrets('ch_1')
+
     # clickhouse = Client(
-    #     host=CH_HOST,
-    #     port=CH_PORT,
-    #     user=CH_USER,
-    #     password=CH_PASSWORD,
+    #     host=conn.host,
+    #     port=conn.port,
+    #     user=conn.login,
+    #     password=conn.password,
     #     settings={"use_numpy":True}
     # )
+    clickhouse = Client(
+        host='clickhouse1',
+        port=9000,
+        user='default',
+        password='',
+        settings={"use_numpy":True}
+    )    
     suffix = context.get('execution_date').strftime('%Y%m%d')
     log.info(FULL_BACKUP.format(num=suffix))
     # clickhouse.execute(FULL_BACKUP) 
@@ -48,13 +46,22 @@ def backup_incremental(**context):
     '''
     Делаем инкрементальный бэкап
     '''
+    conn = Connection.get_connection_from_secrets('ch_1')
+
     # clickhouse = Client(
-    #     host=CH_HOST,
-    #     port=CH_PORT,
-    #     user=CH_USER,
-    #     password=CH_PASSWORD,
+    #     host=conn.host,
+    #     port=conn.port,
+    #     user=conn.login,
+    #     password=conn.password,
     #     settings={"use_numpy":True}
     # )
+    clickhouse = Client(
+        host='clickhouse1',
+        port=9000,
+        user='default',
+        password='',
+        settings={"use_numpy":True}
+    )  
     suffix = context.get('execution_date').strftime('%Y%m%d_%H')
     log.info(INCREMENTAL_BACKUP.format(num=suffix))
     # clickhouse.execute(INCREMENTAL_BACKUP)
@@ -63,19 +70,16 @@ def backup_incremental(**context):
 with DAG(
     dag_id='backup_dag',
     start_date=datetime(2025, 2, 15),
-    schedule_interval=None,
-    description='Даг для осуществеления резервного копирования',
+    schedule_interval='@hourly',
+    catchup=False,
+    description='Даг для осуществления резервного копирования',
 ) as dag:
     
-    # define_backup = ShortCircuitOperator(
-    #     task_id='define_backup',
-    #     python_callable=define_backup
-    # )
-
-    define_backup = PythonOperator(
-        task_id='define_backup',
-        python_callable=define_backup
-    )    
+    full_backup_condition = BranchPythonOperator(
+        task_id='full_backup_condition',
+        python_callable=lambda: 'backup_full' if parse(os.environ['AIRFLOW_CTX_EXECUTION_DATE']).hour == 3 and parse(os.environ['AIRFLOW_CTX_EXECUTION_DATE']).weekday() == 6 else 'backup_incremental',
+        dag=dag
+    )   
         
     backup_full = PythonOperator(
         task_id='backup_full',
@@ -91,4 +95,4 @@ with DAG(
         retry_delay=timedelta(minutes=1),
     )     
 
-    define_backup >> [backup_full, backup_incremental]
+    full_backup_condition >> [backup_full, backup_incremental]
