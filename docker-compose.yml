@@ -1,0 +1,120 @@
+version: '3'
+
+services:
+  zookeeper:
+    image: 'bitnami/zookeeper:3.7.2'
+    hostname: zoo1
+    container_name: zoo1    
+    networks:
+      - ch_replicated
+    environment:
+      - ALLOW_ANONYMOUS_LOGIN=yes
+      - ZOOKEEPER_CLIENT_PORT=2181
+    ports:
+      - "2182:2181"
+      - "2888:2888"
+      - "3888:3888"
+
+  kafka1:  
+    image: 'confluentinc/cp-kafka:7.7.0'  
+    hostname: kafka1
+    container_name: kafka1
+    ports:  
+      - "9092:9092"
+      - "19092:19092"
+    environment:  
+      KAFKA_BROKER_ID: 1  
+      KAFKA_ZOOKEEPER_CONNECT: zoo1:2181  
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka1:9092,PLAINTEXT_HOST://localhost:9092  
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:19092  
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT  
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT  
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1  
+    networks:
+      - ch_replicated        
+    depends_on:
+      - zookeeper      
+    
+  clickhouse1:
+    image: clickhouse/clickhouse-server:24.8.4.13
+    container_name: ch1
+    hostname: clickhouse1     
+    ports:
+      - "9101:9000"
+      - "8223:8123"
+    volumes:
+      - ./ch/replica01/config.d:/etc/clickhouse-server/config.d
+    networks:
+      - ch_replicated
+    depends_on:
+      - zookeeper
+      - minio
+      
+  clickhouse2:
+    image: clickhouse/clickhouse-server:24.8.4.13
+    container_name: ch2
+    hostname: clickhouse2   
+    ports:
+      - "9102:9000"
+      - "8323:8123"
+    volumes:
+      - ./ch/replica02/config.d:/etc/clickhouse-server/config.d
+    networks:
+      - ch_replicated
+    depends_on:
+      - zookeeper
+      - minio
+
+  postgres:
+    image: postgres:15.8-bullseye 
+    container_name: pg
+    hostname: postgres   
+    environment:
+      - POSTGRES_PASSWORD=otus_diploma
+      - POSTGRES_USER=otus
+      - POSTGRES_DB=airflow
+    restart: always
+    ports:
+      - 5432:5432
+    networks:
+      - ch_replicated      
+
+  airflow:
+    build: .
+    restart: always
+    depends_on:
+      - postgres
+    ports:
+      - 8001:8080
+    networks:
+      - ch_replicated      
+    volumes:
+      - ./airflow/dags:/usr/local/airflow/dags
+
+  minio:
+    image: bitnami/minio
+    container_name: minio
+    hostname: minio
+    ports:
+      - 127.0.0.1:10000:9000
+      - 127.0.0.1:10001:9001  
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadminpassword
+      - MINIO_DEFAULT_BUCKETS=clickhouse:public
+    networks:
+      - ch_replicated   
+
+  superset:
+    image: apache/superset:3.1.1
+    container_name: superset
+    environment:
+      - SUPERSET_SECRET_KEY=MyVerySecretKey
+    ports:
+      - '8080:8088'      
+    networks:
+      - ch_replicated   
+
+networks:
+  ch_replicated:
+    driver: bridge
