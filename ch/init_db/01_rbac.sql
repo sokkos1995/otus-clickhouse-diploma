@@ -61,9 +61,38 @@ drop role if exists monitoring_r on cluster otus;
 CREATE ROLE monitoring_r on cluster otus;
 grant on cluster otus SELECT on system.* TO monitoring_r;
 
--- создаем пользователей
+-- создаем пользователей и выдаем гранты
+drop user if exists student ON CLUSTER otus;
+CREATE USER student ON CLUSTER otus IDENTIFIED WITH sha256_password BY 'student_otus';
+GRANT ON CLUSTER otus observer_r TO student;
+GRANT ON CLUSTER otus analytic_r TO student;
 
--- выдаем гранты
+drop user if exists teacher ON CLUSTER otus;
+CREATE USER teacher ON CLUSTER otus IDENTIFIED WITH sha256_password BY 'teacher_otus';
+GRANT ON CLUSTER otus observer_r TO teacher;
+GRANT ON CLUSTER otus analytic_r TO teacher;
+GRANT ON CLUSTER otus data_engineer_r TO teacher;
+GRANT ON CLUSTER otus bi_r TO teacher;
+GRANT ON CLUSTER otus monitoring_r TO teacher;
+
+drop user if exists airflow ON CLUSTER otus;
+CREATE USER airflow ON CLUSTER otus IDENTIFIED WITH sha256_password BY 'airflow_otus';
+GRANT ON CLUSTER otus airflow_r TO airflow;
+
+drop user if exists bi ON CLUSTER otus;
+CREATE USER bi ON CLUSTER otus IDENTIFIED WITH sha256_password BY 'bi_otus';
+GRANT ON CLUSTER otus bi_r TO bi;
+
+-- настраиваем квоты и сеттинги
+drop settings profile if exists bi_timeout_profile ON CLUSTER otus;
+CREATE SETTINGS PROFILE bi_timeout_profile ON CLUSTER otus
+SETTINGS max_execution_time = 5;
+ALTER USER bi SETTINGS PROFILE bi_timeout_profile;
+
+drop QUOTA if exists five_errors_quota ON CLUSTER otus;
+CREATE QUOTA five_errors_quota ON CLUSTER otus
+FOR INTERVAL 1 hour MAX errors = 5
+TO student;
 
 -- создаем именованные коллекции
 drop NAMED COLLECTION if exists airflow_pg on cluster otus;

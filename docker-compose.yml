@@ -76,9 +76,7 @@ services:
       - POSTGRES_PASSWORD=otus_diploma
       - POSTGRES_USER=otus
       - POSTGRES_DB=airflow
-    # restart: always
-    # ports:
-    #   - 5432:5432
+    restart: always
     networks:
       - ch_replicated      
 

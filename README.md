@@ -1,6 +1,6 @@
-# otus-clickhouse-diploma
+# Построение production-ready хранилища данных Такси на базе ClickHouse
 
-Репозиторий для проектной работы по курсу "ClickHouse для инженеров и архитекторов БД"
+Репозиторий для проектной работы по курсу "ClickHouse для инженеров и архитекторов БД". 
 
 ## setup
 
@@ -26,7 +26,26 @@ docker exec -it superset python -m pip install clickhouse-connect
 docker restart superset
 ```
 
-## Вводная часть
+## Технологии/ПО/Подходы, которые были использованы в проекте (и почему)
+
+- Clickhouse - основная аналитическая БД
+- Airflow - оркестратор, через который мы:
+  - забираем данные из внешних систем
+  - с определенной периодичностью снимаем бэкапы
+- PostgreSQL - выполняет 2 функции
+  - внутренняя СУБД для работы Airflow
+  - имитация прода (OLTP) - отсюда забираются нормализованные таблицы через окрестратор, словари и специальный движок PostgreSQL
+- Kafka - еще один источник данных
+- Minio - для хранения бэкапов и политик хранения
+- Superset - для аналитических дашбордов
+
+Схема архитектуры
+
+![архитектура](./images/architect.png)
+
+Здесь желтым отмечены уже реализованные элементы, синим - то, что можно добавить.
+
+## Описательная часть
 
 Описание файлов в репозитории
 - airflow
@@ -49,31 +68,10 @@ docker restart superset
 - datamart - Основная БД для запросов со стороны BI. Единственная таблица - datamart.trips
 - dashboard - БД для мониторинга
 
-## Технологии/ПО/Подходы, которые были использованы в проекте (и почему)
-
-- Clickhouse - основная аналитическая БД
-- Airflow - оркестратор, через который мы:
-  - забираем данные из внешних систем
-  - с определенной периодичностью снимаем бэкапы
-- PostgreSQL - выполняет 2 функции
-  - внутренняя СУБД для работы Airflow
-  - имитация прода (OLTP) - отсюда забираются нормализованные таблицы через окрестратор, словари и специальный движок PostgreSQL
-- Kafka - еще один источник данных
-- Minio - для хранения бэкапов
-- Superset - для аналитических дашбордов
-
-Предложения по масштабированию:
-- мониторинг сейчас сделан за счет встроенного функционала кликхауса - эндпоинта `/dashboards`, для продового варианта я бы рассмотрел связку прометеуса и графаны (вариант развертывания представлен здесь)
-- логи системы сейчас идут в специальные таблицы, по мере усложнения системы (увеличения количества нод) я бы рассмотрел использование ELK-стека 
-
-Схема архитектуры
-
-![архитектура](./images/architect.png)
-
 ## Внешние источники
 
 В качестве внешних источников были выбраны:
-1. PosgreSQL - есть [даг в эирфлоу](./airflow/dags/pg_to_ch.py), который переносит данные (имитация связки OLTP и OLAP через оркестратор)
+1. PosgreSQL - есть [даг в эирфлоу](./airflow/dags/pg_to_ch.py), который переносит данные (имитация связки OLTP и OLAP через оркестратор). Также есть таблица, 
 ```sql
 -- убедимся в работоспособности после отработки дага
 select count() from prod.dag_run;
@@ -87,17 +85,22 @@ select count() from prod.dag_run;
 ```
 2. API - взял из открытых источников, реализовал как ReplacingMT таблицу чтобы избежать необходимости update-ов строк
 3. Внешнее хранилище (с3)
+4. Кафка
 
 Успешные даг раны представлены на скриншоте 
 
 ![Airflow](./images/airflow.png)
 
+Директория с дагами - [тут](./airflow/dags/)
+
 ## RBAC
 
-До создания объектов базы раскатываются объекты RBAC. В проекте представлены следующие сущности
+До создания объектов базы раскатываются [объекты RBAC](./ch/init_db/01_rbac.sql). В проекте представлены следующие сущности
 - пользователи
 - роли
-- право
+- правa
+- квоты
+- профили настроек
 Также создал именованную коллекцию для упрощения доступа
 
 ```sql
@@ -113,6 +116,40 @@ select * from system.roles;
    └─────────────────┴──────────────────────────────────────┴─────────────────┘
 
 6 rows in set. Elapsed: 0.013 sec. 
+*/
+```
+
+Для тестирования квот попробуем сделать 6 ошибок под пользователем student и попробуем выполнить запрос дольше 5 секунд под пользователем bi
+```sql
+-- clickhouse-client --user student --password student_otus
+seclect 1;
+seclect 1;
+seclect 1;
+seclect 1;
+seclect 1;
+seclect 1;
+seclect 1;
+seclect 1;
+seclect 1;
+
+SELECT version();
+/*
+Code: 201. DB::Exception: Received from localhost:9000. DB::Exception: Quota for user `student` for 3600s has been exceeded: errors = 9/5. Interval will end at 2025-02-18 17:00:00. Name of quota template: `five_errors_quota`. (QUOTA_EXCEEDED)
+*/
+
+
+-- clickhouse-client --user bi --password bi_otus
+select count()
+from (select number as id from numbers(10e8)) as t1
+join (select number as id from numbers(1, 10e8, 100)) as t2
+    using (id);
+/*
+↓ Progress: 44.27 million rows, 354.19 MB (9.01 million rows/s., 72.05 MB/s.) ██▌                                 (0.9 CPU, 1.07 GB RAM) 4%
+Elapsed: 4.916 sec. Processed 44.27 million rows, 354.19 MB (9.01 million rows/s., 72.05 MB/s.)
+Peak memory usage: 1.50 GiB.
+
+Received exception from server (version 24.8.4):
+Code: 159. DB::Exception: Received from localhost:9000. DB::Exception: Timeout exceeded: elapsed 5.002511377 seconds, maximum: 5. (TIMEOUT_EXCEEDED)
 */
 ```
 
@@ -173,11 +210,11 @@ GROUP BY table, disk_name
 ORDER BY table, disk_name;
 /*
    ┌─table─┬─disk_name─┬─compressed_size─┬─uncompressed_size─┬─total_rows─┐
-1. │ trips │ default   │ 674.00 B        │ 4.72 KiB          │        100 │
-2. │ trips │ s3_cold   │ 120.71 MiB      │ 206.83 MiB        │    3000317 │
+1. │ trips │ default   │ 4.19 MiB        │ 6.94 MiB          │     100000 │
+2. │ trips │ s3_cold   │ 121.33 MiB      │ 206.83 MiB        │    3000317 │
    └───────┴───────────┴─────────────────┴───────────────────┴────────────┘
 
-2 rows in set. Elapsed: 0.089 sec. 
+2 rows in set. Elapsed: 0.027 sec. 
 */
 ```
 
@@ -198,4 +235,39 @@ SELECT title, query FROM dashboard.kafka_monitoring WHERE dashboard = 'Overview'
 
 ![vis1](./images/superset1.jpg)
 
-![vis2](./images/superset2.jpg)
+![vis2](./images/superset2.png)
+
+Мониторинг логов - добавлены таблицы с логами сессий и ошибок
+```sql
+select hostname, type, event_time_microseconds, user, client_name 
+from system.session_log;
+/*
+   ┌─hostname────┬─type─────────┬────event_time_microseconds─┬─user────┬─client_name───────┐
+1. │ clickhouse2 │ LoginSuccess │ 2025-02-18 16:08:22.200474 │ default │ ClickHouse client │
+2. │ clickhouse2 │ LoginSuccess │ 2025-02-18 16:08:22.216922 │ default │ ClickHouse client │
+3. │ clickhouse2 │ Logout       │ 2025-02-18 16:08:22.252687 │ default │ ClickHouse client │
+   └─────────────┴──────────────┴────────────────────────────┴─────────┴───────────────────┘
+
+3 rows in set. Elapsed: 0.004 sec. 
+*/
+
+select *
+from system.error_log limit 1;
+/*
+
+   ┌─hostname────┬─event_date─┬──────────event_time─┬─code─┬─error─────────────┬─value─┬─remote─┐
+1. │ clickhouse2 │ 2025-02-18 │ 2025-02-18 15:52:29 │  107 │ FILE_DOESNT_EXIST │     1 │      0 │
+   └─────────────┴────────────┴─────────────────────┴──────┴───────────────────┴───────┴────────┘
+
+1 row in set. Elapsed: 0.003 sec. 
+*/
+```
+
+## Заключение
+
+Предложения по масштабированию:
+- мониторинг сейчас сделан за счет встроенного функционала кликхауса - эндпоинта `/dashboards`, для продового варианта я бы рассмотрел связку прометеуса и графаны (вариант развертывания представлен здесь)
+- мониторинг логов - сейчас логи идут в системные таблицы (уже лучше, чем лезть на файловую систему), потенциально можно рассмотреть использование ELK-стека или отдельной ноды для работы с логами всего кластера
+- сейчас секреты разбросаны про репозиторию, пользователи также создавались руками. Для прода я бы рассмотрел использование хранилища секретов (Vault) / LDAP / прочие подходы к вопросу ИБ
+- по мере усложнения системы необходим будет инструмент для Data Lineage - OpenMetaData / DBT
+- кликхаус не предназначен для создания витрин. Поэтому сложные расчеты я бы вынес в отдельную систему - Greenplum (для отчаявшихся), Vertica (для богатых). Также можно рассмотреть связку Trino + Iceberg, Spark on K8S.
