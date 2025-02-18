@@ -14,7 +14,7 @@ BACKUP ALL ON CLUSTER otus TO Disk('s3_backup', 'backup_{num}');
 """
 INCREMENTAL_BACKUP = """
 BACKUP ALL ON CLUSTER otus TO Disk('s3_backup', 'backup_{num}')
-    SETTINGS base_backup = Disk('s3_backup', 'test_backups')
+    SETTINGS base_backup = Disk('s3_backup', 'backup_test');
 """
 
 
@@ -40,7 +40,7 @@ def backup_full(**context):
     )    
     suffix = context.get('execution_date').strftime('%Y%m%d')
     log.info(FULL_BACKUP.format(num=suffix))
-    # clickhouse.execute(FULL_BACKUP) 
+    clickhouse.execute(FULL_BACKUP.format(num=suffix)) 
 
 def backup_incremental(**context):
     '''
@@ -64,7 +64,7 @@ def backup_incremental(**context):
     )  
     suffix = context.get('execution_date').strftime('%Y%m%d_%H')
     log.info(INCREMENTAL_BACKUP.format(num=suffix))
-    # clickhouse.execute(INCREMENTAL_BACKUP)
+    clickhouse.execute(INCREMENTAL_BACKUP.format(num=suffix))
 
 
 with DAG(

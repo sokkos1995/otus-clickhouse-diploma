@@ -28,9 +28,9 @@ airflow connections add 'ch_2' \
 
 airflow connections add 'pg' \
     --conn-type 'HTTP' \
-    --conn-login 'default' \
-    --conn-password '' \
-    --conn-host 'clickhouse2' \
-    --conn-port '9000'     
+    --conn-login 'otus' \
+    --conn-password 'otus_diploma' \
+    --conn-host 'postgres' \
+    --conn-port '5432'     
 
 airflow scheduler & airflow webserver

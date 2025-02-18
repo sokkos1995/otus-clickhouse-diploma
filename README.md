@@ -2,7 +2,7 @@
 
 Репозиторий для проектной работы по курсу "ClickHouse для инженеров и архитекторов БД". 
 
-## setup
+## Setup
 
 ```bash
 # поднимаем инфру
@@ -57,7 +57,7 @@ docker restart superset
 - minio - директория в гитигноре, для локальной сверки что все бэкапы/гибридное хранение успешны
 - src - вспомогательный скрипт с кафка продюссером на python (для демонстрации связки кафка-кликхаус)
 
-Описание структуры БД
+Описание [структуры БД](./ch/init_db/00_databases_and_tables.sql)
 - streams - База данных с консьюмерами кафки
 - raw - База данных с сырыми данными из кафки (данные хранятся как json в строке + метаданные кафки)
 - parsed - База данных с распаршенными данными из кафки
@@ -70,8 +70,10 @@ docker restart superset
 
 ## Внешние источники
 
+Airflow - `http://localhost:8001/home`
+
 В качестве внешних источников были выбраны:
-1. PosgreSQL - есть [даг в эирфлоу](./airflow/dags/pg_to_ch.py), который переносит данные (имитация связки OLTP и OLAP через оркестратор). Также есть таблица, 
+1. PosgreSQL - есть [даг в эирфлоу](./airflow/dags/pg_to_ch.py), который переносит данные (имитация связки OLTP и OLAP через оркестратор). Также есть таблица с движком PostgreSQL, словари
 ```sql
 -- убедимся в работоспособности после отработки дага
 select count() from prod.dag_run;
@@ -83,9 +85,9 @@ select count() from prod.dag_run;
 1 row in set. Elapsed: 0.015 sec. 
 */
 ```
-2. API - взял из открытых источников, реализовал как ReplacingMT таблицу чтобы избежать необходимости update-ов строк
-3. Внешнее хранилище (с3)
-4. Кафка
+2. [API](./airflow/dags/kimi_raikkonen_api.py) - взял из открытых источников, реализовал как ReplacingMT таблицу чтобы избежать необходимости update-ов строк
+3. [Внешнее хранилище (с3)](./airflow/dags/netflix_dag.py)
+4. [Кафка](./src/kafka_producer.py)
 
 Успешные даг раны представлены на скриншоте 
 
@@ -155,7 +157,7 @@ Code: 159. DB::Exception: Received from localhost:9000. DB::Exception: Timeout e
 
 ## Backups and Storage policies
 
-Для холодного хранения данных и для бэкапов были подключео объектное хранилище. В качестве объектного хранилища остановился на Minio  (легкая настройка, open-source). Конфиги представлены в примонтированных директориях, чтобы убедиться ,что все работает, проверим системные таблицы:
+Для холодного хранения данных и для бэкапов были подключено объектное хранилище ( `http://localhost:10001/browser/clickhouse` ). В качестве объектного хранилища остановился на Minio  (легкая настройка, open-source). [Конфиги](./ch/replica01/config.d/storage_policy.xml) представлены в примонтированных директориях, чтобы убедиться ,что все работает, проверим системные таблицы:
 ```sql
 select policy_name, volume_name from system.storage_policies;
 /*
@@ -180,24 +182,28 @@ select name, path, type, object_storage_type from system.disks;
 */
 ```
 
-Бэкапы осуществляются ежечасно по расписанию через эирфлоу. Раз в неделю в 3 ночи по субботам снимаются полные бэкапы, остальные - инкрементальные. Бэкапы выполняются за счет sql:
+Бэкапы осуществляются ежечасно по расписанию через [эирфлоу](./airflow/dags/backup_dag.py). Раз в неделю в 3 ночи по субботам снимаются полные бэкапы, остальные - инкрементальные. Бэкапы выполняются за счет sql:
 ```sql
 -- full backup
-BACKUP ALL ON CLUSTER otus TO Disk('s3_backup', 'backup_20250216');
+BACKUP ALL TO Disk('s3_backup', 'backup_20250216');
 -- incremental
-BACKUP ALL ON CLUSTER otus TO Disk('s3_backup', 'backup_20250216_08')
-    SETTINGS base_backup = Disk('s3_backup', 'test_backups')
+BACKUP ALL TO Disk('s3_backup', 'backup_20250216_08')
+    SETTINGS base_backup = Disk('s3_backup', 'backup_20250216')
+
+select id, name, status from system.backups;
+/*
+   ┌─id───────────────────────────────────┬─name────────────────────────────────────┬─status─────────┐
+1. │ d728c3c6-c316-43d8-ab40-a47cda458056 │ Disk('s3_backup', 'backup_20250216_08') │ BACKUP_CREATED │
+2. │ 80626a8d-daf1-477f-9570-967885a8c6da │ Disk('s3_backup', 'backup_20250216')    │ BACKUP_CREATED │
+3. │ 159a44ae-800e-4459-8500-156e5a95ca99 │ Disk('s3_backup', 'backup_20250216')    │ BACKUP_FAILED  │
+   └──────────────────────────────────────┴─────────────────────────────────────────┴────────────────┘
+
+3 rows in set. Elapsed: 0.003 sec. 
+*/
 ```
 
 Для холодного хранения настроен сторадж. Вставим данные и проверим перемещение.
 ```sql
-INSERT INTO datamart.trips (trip_id, pickup_datetime) 
-SELECT 1, today()
-from numbers(100)
-;
-
-ALTER TABLE datamart.trips  MATERIALIZE TTL ;
-
 SELECT 
     table,
     disk_name,
@@ -220,24 +226,9 @@ ORDER BY table, disk_name;
 
 ![cold](./images/cold_storage.png)
 
-## Мониторинг
+## Визуализации, Мониторинг
 
-Промежуточный вариант - встроенный мониторинг на эндпоинте dashboards. Допустим, мы следим за событиями из кафки (данные с каких то датчиков). Для мониторинга заходим в браузере на `127.0.0.1:8223/dashboards` и вбиваем следующий запрос:
-```sql
-SELECT title, query FROM dashboard.kafka_monitoring WHERE dashboard = 'Overview'
-```
-
-![мониторинг](./images/monitoring.png)
-
-Также поднят суперсет. Логинимся в суперсете и добавляем подключение к базе (справа settings -> database connections). После этого можем идти и строить наши визуализации. В качестве датасета используем денормализованную таблицу `datamart.trips` в виде кастомного sql-запроса `select * from datamart.trips limit 5;`.  
-
-Примеры визуализаций
-
-![vis1](./images/superset1.jpg)
-
-![vis2](./images/superset2.png)
-
-Мониторинг логов - добавлены таблицы с логами сессий и ошибок
+Мониторинг логов - [добавлены](./ch/replica01/config.d/additional_logs.xml) таблицы с логами сессий и ошибок
 ```sql
 select hostname, type, event_time_microseconds, user, client_name 
 from system.session_log;
@@ -262,6 +253,21 @@ from system.error_log limit 1;
 1 row in set. Elapsed: 0.003 sec. 
 */
 ```
+
+Для мониторинга системы есть промежуточный вариант - встроенный мониторинг на эндпоинте dashboards. Допустим, мы следим за событиями из кафки (данные с каких то датчиков). Для мониторинга заходим в браузере на `127.0.0.1:8223/dashboards` и вбиваем следующий запрос:
+```sql
+SELECT title, query FROM dashboard.kafka_monitoring WHERE dashboard = 'Overview'
+```
+
+![мониторинг](./images/monitoring.png)
+
+Также поднят суперсет - `http://localhost:8080/`. Логинимся в суперсете и добавляем подключение к базе (справа settings -> database connections). После этого можем идти и строить наши визуализации. В качестве датасета используем денормализованную таблицу `datamart.trips` в виде кастомного sql-запроса `select * from datamart.trips limit 5;`.  
+
+Примеры визуализаций
+
+![vis1](./images/superset1.jpg)
+
+![vis2](./images/superset2.png)
 
 ## Заключение
 
