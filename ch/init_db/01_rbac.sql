@@ -91,7 +91,7 @@ ALTER USER bi SETTINGS PROFILE bi_timeout_profile;
 
 drop QUOTA if exists five_errors_quota ON CLUSTER otus;
 CREATE QUOTA five_errors_quota ON CLUSTER otus
-FOR INTERVAL 1 hour MAX errors = 5
+FOR INTERVAL 1 hour MAX queries = 1  /* MAX errors = 5 */
 TO student;
 
 -- создаем именованные коллекции
